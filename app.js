@@ -511,11 +511,7 @@ encryptBtn.addEventListener("click", async () => {
       files: selectedFiles,
     });
 
-    const safetensorsBytes = wrapSafetensors(archive7zBytes, {
-      hail: "secret-v1",
-      wrapped: "7z",
-      note_file: x,
-    });
+    const safetensorsBytes = wrapSafetensors(archive7zBytes, {    });
 
     // Save to disk
     downloadBytes(
