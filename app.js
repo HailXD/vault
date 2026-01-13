@@ -5,6 +5,12 @@ const SEVENZ_WASM = SEVENZ_BASE + "7zz.wasm";
 const SEVENZ_SIGNATURE = new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
 const SEVENZ_HEADER_LEN = 32;
 const SEVENZ_HEADER_KEY = "p";
+const PAYLOAD_VERSION = 1;
+const PAYLOAD_SALT_LEN = 16;
+const PAYLOAD_COUNTER_LEN = 16;
+const PAYLOAD_PREFIX_LEN = 1 + PAYLOAD_SALT_LEN + PAYLOAD_COUNTER_LEN;
+const PBKDF2_ITERATIONS = 120000;
+const AES_CTR_LENGTH = 64;
 
 // === DOM ===
 const el = (id) => document.getElementById(id);
@@ -81,17 +87,75 @@ function u8concat(...parts) {
   return out;
 }
 
-function bytesToBase64(bytes) {
-  let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s);
-}
-
 function base64ToBytes(text) {
   const bin = atob(text);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+async function derivePayloadKey(key, salt) {
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(key),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: PBKDF2_ITERATIONS,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    { name: "AES-CTR", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encodePayload(archiveBytes, key) {
+  const salt = crypto.getRandomValues(new Uint8Array(PAYLOAD_SALT_LEN));
+  const counter = crypto.getRandomValues(new Uint8Array(PAYLOAD_COUNTER_LEN));
+  const aesKey = await derivePayloadKey(key, salt);
+  const masked = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter, length: AES_CTR_LENGTH },
+      aesKey,
+      archiveBytes
+    )
+  );
+  const prefix = new Uint8Array(PAYLOAD_PREFIX_LEN);
+  prefix[0] = PAYLOAD_VERSION;
+  prefix.set(salt, 1);
+  prefix.set(counter, 1 + PAYLOAD_SALT_LEN);
+  return u8concat(prefix, masked);
+}
+
+async function decodePayload(payload, key) {
+  if (payload.length <= PAYLOAD_PREFIX_LEN) {
+    throw new Error("Invalid payload.");
+  }
+  const version = payload[0];
+  if (version !== PAYLOAD_VERSION) {
+    throw new Error("Unsupported payload format.");
+  }
+  const salt = payload.slice(1, 1 + PAYLOAD_SALT_LEN);
+  const counter = payload.slice(
+    1 + PAYLOAD_SALT_LEN,
+    PAYLOAD_PREFIX_LEN
+  );
+  const masked = payload.slice(PAYLOAD_PREFIX_LEN);
+  const aesKey = await derivePayloadKey(key, salt);
+  return new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: "AES-CTR", counter, length: AES_CTR_LENGTH },
+      aesKey,
+      masked
+    )
+  );
 }
 
 function isSevenZ(bytes) {
@@ -100,16 +164,6 @@ function isSevenZ(bytes) {
     if (bytes[i] !== SEVENZ_SIGNATURE[i]) return false;
   }
   return true;
-}
-
-function splitSevenZ(bytes) {
-  if (!isSevenZ(bytes) || bytes.length < SEVENZ_HEADER_LEN) {
-    return { head: null, body: bytes };
-  }
-  return {
-    head: bytes.slice(0, SEVENZ_HEADER_LEN),
-    body: bytes.slice(SEVENZ_HEADER_LEN),
-  };
 }
 
 function joinSevenZ(bytes, headBase64) {
@@ -125,12 +179,9 @@ function joinSevenZ(bytes, headBase64) {
   return u8concat(head, bytes);
 }
 
-function wrapSafetensors(payloadU8, metadata = {}) {
+function wrapSafetensors(payloadU8) {
   // Safetensors format: 8 bytes (LE u64) header length, then JSON header, then data buffer. :contentReference[oaicite:4]{index=4}
   const headerObj = {
-    __metadata__: Object.fromEntries(
-      Object.entries(metadata).map(([k, v]) => [String(k), String(v)])
-    ),
     payload: {
       dtype: "U8",
       shape: [payloadU8.length],
@@ -558,9 +609,8 @@ encryptBtn.addEventListener("click", async () => {
       files: selectedFiles,
     });
 
-    const { head, body } = splitSevenZ(archive7zBytes);
-    const metadata = head ? { [SEVENZ_HEADER_KEY]: bytesToBase64(head) } : {};
-    const safetensorsBytes = wrapSafetensors(body, metadata);
+    const payload = await encodePayload(archive7zBytes, key);
+    const safetensorsBytes = wrapSafetensors(payload);
 
     // Save to disk
     downloadBytes(
@@ -604,7 +654,17 @@ decryptBtn.addEventListener("click", async () => {
 
     const { header, payload } = parseSafetensors(fileBytes);
     const meta = header?.__metadata__ || {};
-    const archiveBytes = joinSevenZ(payload, meta[SEVENZ_HEADER_KEY]);
+    let archiveBytes = null;
+    if (isSevenZ(payload)) {
+      archiveBytes = payload;
+    } else if (meta[SEVENZ_HEADER_KEY]) {
+      archiveBytes = joinSevenZ(payload, meta[SEVENZ_HEADER_KEY]);
+    } else {
+      archiveBytes = await decodePayload(payload, key);
+    }
+    if (!isSevenZ(archiveBytes)) {
+      throw new Error("Invalid key or payload.");
+    }
     const x = f.name.endsWith(".safetensors")
       ? f.name.slice(0, -".safetensors".length)
       : "x";
