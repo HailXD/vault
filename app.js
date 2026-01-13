@@ -5,12 +5,11 @@ const SEVENZ_WASM = SEVENZ_BASE + "7zz.wasm";
 const SEVENZ_SIGNATURE = new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
 const SEVENZ_HEADER_LEN = 32;
 const SEVENZ_HEADER_KEY = "p";
-const PAYLOAD_VERSION = 1;
+const PAYLOAD_VERSION = 2;
 const PAYLOAD_SALT_LEN = 16;
-const PAYLOAD_COUNTER_LEN = 16;
-const PAYLOAD_PREFIX_LEN = 1 + PAYLOAD_SALT_LEN + PAYLOAD_COUNTER_LEN;
-const PBKDF2_ITERATIONS = 120000;
-const AES_CTR_LENGTH = 64;
+const PAYLOAD_IV_LEN = 12;
+const PAYLOAD_PREFIX_LEN = 1 + PAYLOAD_SALT_LEN + PAYLOAD_IV_LEN;
+const PBKDF2_ITERATIONS = 600000;
 
 // === DOM ===
 const el = (id) => document.getElementById(id);
@@ -110,7 +109,7 @@ async function derivePayloadKey(key, salt) {
       hash: "SHA-256",
     },
     keyMaterial,
-    { name: "AES-CTR", length: 256 },
+    { name: "AES-GCM", length: 256 },
     false,
     ["encrypt", "decrypt"]
   );
@@ -118,11 +117,11 @@ async function derivePayloadKey(key, salt) {
 
 async function encodePayload(archiveBytes, key) {
   const salt = crypto.getRandomValues(new Uint8Array(PAYLOAD_SALT_LEN));
-  const counter = crypto.getRandomValues(new Uint8Array(PAYLOAD_COUNTER_LEN));
+  const iv = crypto.getRandomValues(new Uint8Array(PAYLOAD_IV_LEN));
   const aesKey = await derivePayloadKey(key, salt);
   const masked = new Uint8Array(
     await crypto.subtle.encrypt(
-      { name: "AES-CTR", counter, length: AES_CTR_LENGTH },
+      { name: "AES-GCM", iv },
       aesKey,
       archiveBytes
     )
@@ -130,7 +129,7 @@ async function encodePayload(archiveBytes, key) {
   const prefix = new Uint8Array(PAYLOAD_PREFIX_LEN);
   prefix[0] = PAYLOAD_VERSION;
   prefix.set(salt, 1);
-  prefix.set(counter, 1 + PAYLOAD_SALT_LEN);
+  prefix.set(iv, 1 + PAYLOAD_SALT_LEN);
   return u8concat(prefix, masked);
 }
 
@@ -143,15 +142,12 @@ async function decodePayload(payload, key) {
     throw new Error("Unsupported payload format.");
   }
   const salt = payload.slice(1, 1 + PAYLOAD_SALT_LEN);
-  const counter = payload.slice(
-    1 + PAYLOAD_SALT_LEN,
-    PAYLOAD_PREFIX_LEN
-  );
+  const iv = payload.slice(1 + PAYLOAD_SALT_LEN, PAYLOAD_PREFIX_LEN);
   const masked = payload.slice(PAYLOAD_PREFIX_LEN);
   const aesKey = await derivePayloadKey(key, salt);
   return new Uint8Array(
     await crypto.subtle.decrypt(
-      { name: "AES-CTR", counter, length: AES_CTR_LENGTH },
+      { name: "AES-GCM", iv },
       aesKey,
       masked
     )
@@ -652,16 +648,8 @@ decryptBtn.addEventListener("click", async () => {
 
     const fileBytes = new Uint8Array(await f.arrayBuffer());
 
-    const { header, payload } = parseSafetensors(fileBytes);
-    const meta = header?.__metadata__ || {};
-    let archiveBytes = null;
-    if (isSevenZ(payload)) {
-      archiveBytes = payload;
-    } else if (meta[SEVENZ_HEADER_KEY]) {
-      archiveBytes = joinSevenZ(payload, meta[SEVENZ_HEADER_KEY]);
-    } else {
-      archiveBytes = await decodePayload(payload, key);
-    }
+    const { payload } = parseSafetensors(fileBytes);
+    const archiveBytes = await decodePayload(payload, key);
     if (!isSevenZ(archiveBytes)) {
       throw new Error("Invalid key or payload.");
     }
