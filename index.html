@@ -3,19 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Secret Vault</title>
+    <title>Vault</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div class="wrap">
       <section class="card">
-        <div class="title">Secret Vault</div>
-        <div class="sub">
-          Builds a password-protected <span class="mono">.7z</span> and
-          (optionally) wraps it in a valid
-          <span class="mono">.safetensors</span> container. No uploads —
-          everything stays in your browser.
-        </div>
+        <div class="title">Vault</div>
 
         <div class="grid">
           <div>
@@ -31,10 +25,6 @@
                 👁️
               </button>
             </div>
-            <div class="hint">
-              Tip: use a long passphrase. Filenames are encrypted using
-              <span class="mono">-mhe=on</span>.
-            </div>
           </div>
 
           <div>
@@ -46,10 +36,6 @@
                 accept=".safetensors,application/octet-stream"
               />
               <span class="pill" id="secretBadge">No secret loaded</span>
-            </div>
-            <div class="hint">
-              Decrypt will list filenames + sizes and only extract the note file
-              (<span class="mono">x</span>) into the text box.
             </div>
           </div>
         </div>
@@ -64,10 +50,6 @@
             <div>
               <label for="fileInput">Add file(s)</label>
               <input id="fileInput" type="file" multiple />
-              <div class="hint">
-                Selected files will be added to the archive alongside the note
-                file named <span class="mono">x</span>.
-              </div>
             </div>
             <button class="btn danger" id="clearFiles">
               Delete all selected
