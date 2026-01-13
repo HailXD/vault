@@ -105,6 +105,29 @@ textarea:focus {
 
 input[type="file"] {
   color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  width: 100%;
+}
+
+input[type="file"]::file-selector-button {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-right: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+input[type="file"]::file-selector-button:hover {
+  border-color: #32425a;
+  background: #151d2b;
 }
 
 textarea {
@@ -154,6 +177,15 @@ textarea {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.secret-row {
+  flex-wrap: nowrap;
+}
+
+.secret-row input[type="file"] {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .btn {
