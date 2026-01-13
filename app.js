@@ -15,7 +15,6 @@ const filesSummaryEl = el("filesSummary");
 const filesPillEl = el("filesPill");
 const fileInputEl = el("fileInput");
 const selectedListEl = el("selectedList");
-const secretListEl = el("secretList");
 const clearFilesEl = el("clearFiles");
 const encryptBtn = el("encrypt");
 const decryptBtn = el("decrypt");
@@ -25,6 +24,7 @@ const download7zBtn = el("download7z");
 let selectedFiles = [];
 let loadedSecret = null; // { name, bytes: Uint8Array, x, list: [{name,size}], noteText, archive7zBytes }
 let sevenZipInstance = null;
+let secretFileCache = new Map();
 
 // === Helpers ===
 function formatBytes(n) {
@@ -199,6 +199,11 @@ async function writeFileToFS(sz, file, targetName) {
   sevenZip.FS.writeFile("/work/" + targetName, buf);
 }
 
+function writeBytesToFS(sz, bytes, targetName) {
+  const { sevenZip } = sz;
+  sevenZip.FS.writeFile("/work/" + targetName, bytes);
+}
+
 function sanitizeName(name) {
   // Keep original names as much as possible; replace path separators
   return name.replace(/[\\/]/g, "_");
@@ -218,7 +223,16 @@ async function build7zArchiveBytes({ key, x, text, files }) {
   const inNames = [x];
   for (const f of files) {
     const n = sanitizeName(f.name);
-    await writeFileToFS(sz, f, n);
+    if (f?.source === "local") {
+      await writeFileToFS(sz, f.file, n);
+    } else if (f?.source === "secret") {
+      const bytes = await getSecretFileBytes(key, f.name);
+      writeBytesToFS(sz, bytes, n);
+    } else if (f instanceof File) {
+      await writeFileToFS(sz, f, n);
+    } else {
+      throw new Error("Unsupported file entry.");
+    }
     inNames.push(n);
   }
 
@@ -281,7 +295,7 @@ async function list7zFiles({ key, archiveBytes }) {
   return { list: parse7zListSLT(text) };
 }
 
-async function extractSingleFile({ key, archiveBytes, filename }) {
+async function extractArchiveFileBytes({ key, archiveBytes, filename }) {
   const sz = await ensureSevenZip();
   resetLogs(sz);
   resetWorkDir(sz);
@@ -295,7 +309,26 @@ async function extractSingleFile({ key, archiveBytes, filename }) {
   } catch {}
   sevenZip.callMain(["e", `-p${key}`, "-y", "payload.7z", filename, "-oout"]);
 
-  const data = sevenZip.FS.readFile("/work/out/" + filename);
+  const entries = sevenZip.FS
+    .readdir("/work/out")
+    .filter((name) => name !== "." && name !== "..");
+  if (!entries.length) {
+    throw new Error("File not found in archive.");
+  }
+  const data = sevenZip.FS.readFile("/work/out/" + entries[0]);
+  for (const entry of entries) {
+    try {
+      sevenZip.FS.unlink("/work/out/" + entry);
+    } catch {}
+  }
+  try {
+    sevenZip.FS.rmdir("/work/out");
+  } catch {}
+  return data;
+}
+
+async function extractSingleFile({ key, archiveBytes, filename }) {
+  const data = await extractArchiveFileBytes({ key, archiveBytes, filename });
   return new TextDecoder().decode(data);
 }
 
@@ -305,17 +338,24 @@ function updateSecretBadge() {
     secretBadgeEl.className = "pill";
     return;
   }
+  const size = loadedSecret.bytes?.length ?? loadedSecret.size ?? 0;
   secretBadgeEl.textContent = `Loaded: ${loadedSecret.name} (${formatBytes(
-    loadedSecret.bytes.length
+    size
   )})`;
   secretBadgeEl.className = "pill ok";
 }
 
 function updateFilesUI() {
-  const total = selectedFiles.reduce((s, f) => s + f.size, 0);
+  const total = selectedFiles.reduce((s, f) => s + (f?.size || 0), 0);
+  // Secret list (read-only)
+  const secretCount = selectedFiles.reduce(
+    (s, f) => s + (f?.source === "secret" ? 1 : 0),
+    0
+  );
+  const decodedNote = secretCount ? ` (${secretCount} decoded)` : "";
   filesSummaryEl.textContent = `${selectedFiles.length} file${
     selectedFiles.length === 1 ? "" : "s"
-  } ${formatBytes(total)}`;
+  } ${formatBytes(total)}${decodedNote}`;
   filesPillEl.textContent = filesDetailsEl.open ? "Expanded" : "Collapsed";
 
   // Selected list
@@ -327,12 +367,15 @@ function updateFilesUI() {
       const f = selectedFiles[i];
       const row = document.createElement("div");
       row.className = "item";
+      const sourceTag =
+        f.source === "secret" ? `<span class="pill tag">decoded</span>` : "";
       row.innerHTML = `
         <div>
-          <div class="name">${escapeHtml(f.name)}</div>
-          <div class="meta">${formatBytes(f.size)}</div>
+          <div class="name">${escapeHtml(f.name)} ${sourceTag}</div>
+          <div class="meta">${formatBytes(f.size || 0)}</div>
         </div>
         <div class="right">
+          <button class="btn ghost" data-dl="${i}">Download</button>
           <button class="btn danger" data-rm="${i}">Remove</button>
         </div>
       `;
@@ -340,31 +383,14 @@ function updateFilesUI() {
         selectedFiles.splice(i, 1);
         updateFilesUI();
       });
+      row.querySelector("[data-dl]").addEventListener("click", async () => {
+        try {
+          await downloadSelectedItem(selectedFiles[i]);
+        } catch (e) {
+          reportError(e);
+        }
+      });
       selectedListEl.appendChild(row);
-    }
-  }
-
-  // Secret list (read-only)
-  secretListEl.innerHTML = "";
-  if (!loadedSecret?.list?.length) {
-    secretListEl.innerHTML = `<div class="small">No secret file listing.</div>`;
-  } else {
-    for (const it of loadedSecret.list) {
-      const row = document.createElement("div");
-      row.className = "item";
-      const isNote = it.name === loadedSecret.x;
-      row.innerHTML = `
-        <div>
-          <div class="name">${escapeHtml(it.name)} ${
-        isNote ? `<span class="pill">note</span>` : ""
-      }</div>
-          <div class="meta">${formatBytes(it.size || 0)}</div>
-        </div>
-        <div class="right">
-          <span class="pill">locked</span>
-        </div>
-      `;
-      secretListEl.appendChild(row);
     }
   }
 }
@@ -385,6 +411,42 @@ function requireKey() {
   return key;
 }
 
+async function getSecretFileBytes(key, filename) {
+  if (!loadedSecret?.archive7zBytes) {
+    throw new Error("No decoded secret loaded.");
+  }
+  if (secretFileCache.has(filename)) {
+    return secretFileCache.get(filename);
+  }
+  const bytes = await extractArchiveFileBytes({
+    key,
+    archiveBytes: loadedSecret.archive7zBytes,
+    filename,
+  });
+  secretFileCache.set(filename, bytes);
+  return bytes;
+}
+
+async function downloadSelectedItem(item) {
+  if (!item) return;
+  if (item.source === "local") {
+    const bytes = new Uint8Array(await item.file.arrayBuffer());
+    downloadBytes(
+      bytes,
+      sanitizeName(item.name),
+      item.file.type || "application/octet-stream"
+    );
+    return;
+  }
+  if (item.source === "secret") {
+    const key = requireKey();
+    const bytes = await getSecretFileBytes(key, item.name);
+    downloadBytes(bytes, sanitizeName(item.name), "application/octet-stream");
+    return;
+  }
+  throw new Error("Unknown file source.");
+}
+
 // === UI events ===
 toggleKeyEl.addEventListener("click", () => {
   keyEl.type = keyEl.type === "password" ? "text" : "password";
@@ -395,7 +457,14 @@ filesDetailsEl.addEventListener("toggle", updateFilesUI);
 
 fileInputEl.addEventListener("change", () => {
   if (fileInputEl.files?.length) {
-    selectedFiles.push(...Array.from(fileInputEl.files));
+    selectedFiles.push(
+      ...Array.from(fileInputEl.files).map((file) => ({
+        source: "local",
+        file,
+        name: file.name,
+        size: file.size,
+      }))
+    );
     fileInputEl.value = "";
     updateFilesUI();
   }
@@ -409,12 +478,15 @@ clearFilesEl.addEventListener("click", () => {
 secretInputEl.addEventListener("change", async () => {
   const f = secretInputEl.files?.[0];
   loadedSecret = null;
+  secretFileCache = new Map();
+  selectedFiles = selectedFiles.filter((item) => item.source !== "secret");
   updateSecretBadge();
   updateFilesUI();
   if (!f) return;
   loadedSecret = {
     name: f.name,
     bytes: null,
+    size: f.size,
     x: null,
     list: [],
     noteText: "",
@@ -456,11 +528,13 @@ encryptBtn.addEventListener("click", async () => {
     loadedSecret = {
       name: `${x}.safetensors`,
       bytes: safetensorsBytes,
+      size: safetensorsBytes.length,
       x,
       list: [],
       noteText: textEl.value,
       archive7zBytes,
     };
+    secretFileCache = new Map();
     updateSecretBadge();
     updateFilesUI();
   } catch (e) {
@@ -499,11 +573,22 @@ decryptBtn.addEventListener("click", async () => {
     loadedSecret = {
       name: f.name,
       bytes: fileBytes,
+      size: fileBytes.length,
       x,
       list,
       noteText,
       archive7zBytes: payload,
     };
+    secretFileCache = new Map();
+    selectedFiles = selectedFiles.filter((item) => item.source !== "secret");
+    for (const it of list) {
+      if (it.name === x) continue;
+      selectedFiles.push({
+        source: "secret",
+        name: it.name,
+        size: it.size || 0,
+      });
+    }
 
     textEl.value = noteText;
     updateSecretBadge();
