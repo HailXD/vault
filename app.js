@@ -497,7 +497,7 @@ async function downloadSelectedItem(item) {
 // === UI events ===
 toggleKeyEl.addEventListener("click", () => {
   keyEl.type = keyEl.type === "password" ? "text" : "password";
-  toggleKeyEl.textContent = keyEl.type === "password" ? "dY`?‹,?" : "dYT^";
+  toggleKeyEl.textContent = keyEl.type === "password" ? "Show" : "Hide";
 });
 
 filesDetailsEl.addEventListener("toggle", updateFilesUI);

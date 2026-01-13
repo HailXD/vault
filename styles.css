@@ -112,6 +112,43 @@ textarea {
   resize: vertical;
 }
 
+.input-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+.input-wrap input[type="text"],
+.input-wrap input[type="password"] {
+  padding-right: 70px;
+}
+
+.input-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.input-toggle:hover {
+  border-color: #32425a;
+  background: #151d2b;
+  color: var(--text);
+}
+
+.input-toggle:active {
+  transform: translateY(-50%) translateY(1px);
+}
+
 .row {
   display: flex;
   gap: 10px;
